@@ -1,6 +1,6 @@
 /* examples/demo.rs */
 
-use real::{HeaderMap, IpExtractor, extract_real_ip, extract_real_ip_strict};
+use real::{IpExtractor, extract_real_ip, extract_real_ip_strict};
 use std::collections::HashMap;
 
 fn main() {
@@ -163,12 +163,4 @@ fn example_7_custom_extractor() {
         None => println!("Default extractor: No IP found"),
     }
     println!();
-}
-
-fn create_sample_headers() -> HeaderMap {
-    let mut headers = HashMap::new();
-    headers.insert("host".to_string(), "example.com".to_string());
-    headers.insert("user-agent".to_string(), "Mozilla/5.0".to_string());
-    headers.insert("accept".to_string(), "text/html".to_string());
-    headers
 }
