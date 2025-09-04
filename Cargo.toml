@@ -1,6 +1,6 @@
 [package]
 name = "real"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2024"
 description = "A lightweight library for extracting the real client IP address from HTTP requests, supporting common forwarding headers such as X-Real-IP and X-Forwarded-For, with a fallback to the remote socket address."
 license = "MIT"
