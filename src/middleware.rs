@@ -1,9 +1,8 @@
 /* src/middleware.rs */
 
 use axum::{
-    extract::{ConnectInfo, Request},
-    http::HeaderMap,
-    response::Response,
+    extract::{ConnectInfo, FromRequestParts},
+    http::{Request, Response, request::Parts},
 };
 use futures_util::future::BoxFuture;
 use std::{
@@ -12,7 +11,7 @@ use std::{
 };
 use tower::{Layer, Service};
 
-use crate::extractor::IpExtractor;
+use crate::extractor::{HeaderMap as InnerHeaderMap, IpExtractor};
 
 /// Extension that holds the extracted real IP address.
 #[derive(Debug, Clone)]
@@ -25,22 +24,8 @@ impl RealIp {
     }
 }
 
-/// Layer for extracting real IP addresses from HTTP requests.
-///
-/// This layer will examine common forwarding headers and extract the real client IP,
-/// storing it as a request extension that can be accessed by handlers.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use axum::{Router, routing::get, response::Json};
-/// use real::RealIpLayer;
-/// use tower::ServiceBuilder;
-///
-/// let app = Router::new()
-///     .route("/", get(handler))
-///     .layer(ServiceBuilder::new().layer(RealIpLayer::default()));
-/// ```
+/// A layer that extracts the real IP address from a request and inserts it into
+/// the request extensions, making it available for subsequent handlers and extractors.
 #[derive(Debug, Clone)]
 pub struct RealIpLayer {
     extractor: IpExtractor,
@@ -49,6 +34,7 @@ pub struct RealIpLayer {
 impl Default for RealIpLayer {
     fn default() -> Self {
         Self {
+            // Default behavior: trust private IPs from headers.
             extractor: IpExtractor::default().trust_private_ips(true),
         }
     }
@@ -84,17 +70,19 @@ impl<S> Layer<S> for RealIpLayer {
     }
 }
 
-/// Service that extracts real IP addresses.
+/// The `tower::Service` that implements the real IP extraction logic.
 #[derive(Debug, Clone)]
 pub struct RealIpService<S> {
     inner: S,
     extractor: IpExtractor,
 }
 
-impl<S> Service<Request> for RealIpService<S>
+impl<S, ReqBody, ResBody> Service<Request<ReqBody>> for RealIpService<S>
 where
-    S: Service<Request, Response = Response> + Send + 'static,
+    S: Service<Request<ReqBody>, Response = Response<ResBody>> + Clone + Send + 'static,
     S::Future: Send + 'static,
+    ReqBody: Send + 'static,
+    ResBody: Send + 'static,
 {
     type Response = S::Response;
     type Error = S::Error;
@@ -104,81 +92,64 @@ where
         self.inner.poll_ready(cx)
     }
 
-    fn call(&mut self, mut req: Request) -> Self::Future {
-        // Extract headers
-        let headers = req.headers();
-        let header_map = headers_to_map(headers);
+    fn call(&mut self, mut req: Request<ReqBody>) -> Self::Future {
+        let mut inner = self.inner.clone();
+        let extractor = self.extractor.clone();
 
-        // Get fallback IP from connection info
-        let fallback_ip = req
-            .extensions()
-            .get::<ConnectInfo<SocketAddr>>()
-            .map(|connect_info| connect_info.0.ip().to_string());
+        Box::pin(async move {
+            let fallback_ip = req
+                .extensions()
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|connect_info| connect_info.0.ip().to_string());
 
-        // Extract real IP
-        if let Some(real_ip) = self.extractor.extract(&header_map, fallback_ip) {
-            req.extensions_mut().insert(RealIp(real_ip));
-        }
+            let header_map = headers_to_map(req.headers());
 
-        let future = self.inner.call(req);
-        Box::pin(async move { future.await })
+            if let Some(real_ip) = extractor.extract(&header_map, fallback_ip) {
+                req.extensions_mut().insert(RealIp(real_ip));
+            }
+
+            inner.call(req).await
+        })
     }
 }
 
 /// Convert Axum headers to our internal header map format.
-fn headers_to_map(headers: &HeaderMap) -> std::collections::HashMap<String, String> {
-    let mut map = std::collections::HashMap::new();
-
+fn headers_to_map(headers: &axum::http::HeaderMap) -> InnerHeaderMap {
+    let mut map = InnerHeaderMap::new();
     for (name, value) in headers.iter() {
         if let Ok(value_str) = value.to_str() {
             map.insert(name.as_str().to_lowercase(), value_str.to_string());
         }
     }
-
     map
 }
 
 /// Axum extractor for the real IP address.
-///
-/// # Examples
-///
-/// ```rust,no_run
-/// use axum::{response::Json, routing::get, Router};
-/// use real::{RealIp, RealIpLayer};
-/// use serde_json::json;
-///
-/// async fn handler(real_ip: Option<RealIp>) -> Json<serde_json::Value> {
-///     match real_ip {
-///         Some(ip) => Json(json!({"ip": ip.ip().to_string()})),
-///         None => Json(json!({"error": "Could not determine real IP"})),
-///     }
-/// }
-///
-/// let app = Router::new()
-///     .route("/", get(handler))
-///     .layer(RealIpLayer::default());
-/// ```
-#[axum::async_trait]
-impl<S> axum::extract::FromRequestParts<S> for RealIp
+impl<S> FromRequestParts<S> for RealIp
 where
     S: Send + Sync,
 {
     type Rejection = std::convert::Infallible;
 
-    async fn from_request_parts(
-        parts: &mut axum::http::request::Parts,
-        _state: &S,
-    ) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(parts: &mut Parts, state: &S) -> Result<Self, Self::Rejection> {
+        let _ = state;
+
         if let Some(real_ip) = parts.extensions.get::<RealIp>() {
-            Ok(real_ip.clone())
-        } else {
-            // Fallback to connection info if available
-            if let Some(connect_info) = parts.extensions.get::<ConnectInfo<SocketAddr>>() {
-                Ok(RealIp(connect_info.0.ip()))
-            } else {
-                // Default fallback
-                Ok(RealIp(IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))))
-            }
+            return Ok(real_ip.clone());
         }
+
+        let fallback_ip = parts
+            .extensions
+            .get::<ConnectInfo<SocketAddr>>()
+            .map(|connect_info| connect_info.0.ip().to_string());
+
+        let header_map = headers_to_map(&parts.headers);
+
+        let extractor = IpExtractor::default().trust_private_ips(false);
+        if let Some(real_ip) = extractor.extract(&header_map, fallback_ip) {
+            return Ok(RealIp(real_ip));
+        }
+
+        Ok(RealIp(IpAddr::V4(std::net::Ipv4Addr::new(127, 0, 0, 1))))
     }
 }
