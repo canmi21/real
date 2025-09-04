@@ -2,12 +2,12 @@
 name = "real"
 version = "0.1.1"
 edition = "2024"
-description = "A lightweight library for extracting the real client IP address from HTTP requests, supporting common forwarding headers such as X-Real-IP and X-Forwarded-For, with a fallback to the remote socket address."
+description = "A lightweight library for extracting the real client IP address from HTTP requests."
 license = "MIT"
 repository = "https://github.com/canmi21/real"
 readme = "README.md"
-keywords = ["network", "server", "ip", "web"]
-categories = ["network-programming", "web-programming", "development-tools"]
+keywords = ["ip", "http", "proxy", "forwarded", "real-ip"]
+categories = ["web-programming", "network-programming"]
 
 [lib]
 path = "src/lib.rs"
@@ -17,4 +17,26 @@ crate-type = ["lib"]
 name = "demo"
 path = "examples/demo.rs"
 
+[[example]]
+name = "axum"
+path = "examples/axum.rs"
+required-features = ["axum"]
+
 [dependencies]
+thiserror = "1"
+axum = { version = "0.8", optional = true }
+tower = { version = "0.4", optional = true }
+tower-layer = { version = "0.3", optional = true }
+tower-service = { version = "0.3", optional = true }
+http = { version = "1.0", optional = true }
+futures-util = { version = "0.3", optional = true }
+
+[dev-dependencies]
+tokio = { version = "1.0", features = ["full"] }
+axum = "0.7"
+tower = "0.4"
+http = "1.0"
+
+[features]
+default = []
+axum = ["dep:axum", "dep:tower", "dep:tower-layer", "dep:tower-service", "dep:http", "dep:futures-util"]
