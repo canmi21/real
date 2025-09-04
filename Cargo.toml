@@ -1,0 +1,20 @@
+[package]
+name = "real"
+version = "0.1.0"
+edition = "2024"
+description = "A lightweight library for extracting the real client IP address from HTTP requests, supporting common forwarding headers such as X-Real-IP and X-Forwarded-For, with a fallback to the remote socket address."
+license = "MIT"
+repository = "https://github.com/canmi21/real"
+readme = "README.md"
+keywords = ["network", "server", "ip", "web"]
+categories = ["network-programming", "web-programming", "development-tools"]
+
+[lib]
+path = "src/lib.rs"
+crate-type = ["lib"]
+
+[[example]]
+name = "demo"
+path = "examples/demo.rs"
+
+[dependencies]
