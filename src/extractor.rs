@@ -96,16 +96,15 @@ impl IpExtractor {
         // Handle X-Forwarded-For format: "client, proxy1, proxy2"
         if value.contains(',') {
             let ips: Vec<&str> = value.split(',').map(|s| s.trim()).collect();
-            if self.use_first_forwarded && !ips.is_empty() {
-                if let Ok(ip) = ips[0].parse::<IpAddr>() {
-                    return Some(ip);
-                }
+            let ip_iter: Box<dyn Iterator<Item = &&str>> = if self.use_first_forwarded {
+                Box::new(ips.iter())
             } else {
-                // Use the last valid IP (closest to origin)
-                for ip_str in ips.iter().rev() {
-                    if let Ok(ip) = ip_str.parse::<IpAddr>() {
-                        return Some(ip);
-                    }
+                Box::new(ips.iter().rev())
+            };
+
+            for ip_str in ip_iter {
+                if let Ok(ip) = ip_str.parse::<IpAddr>() {
+                    return Some(ip);
                 }
             }
         } else {
@@ -131,7 +130,7 @@ impl IpExtractor {
         match ip {
             IpAddr::V4(ipv4) => ipv4.is_private() || ipv4.is_loopback() || ipv4.is_link_local(),
             IpAddr::V6(ipv6) => {
-                ipv6.is_loopback() || 
+                ipv6.is_loopback() ||
                 (ipv6.segments()[0] & 0xfe00) == 0xfc00 || // Unique local
                 (ipv6.segments()[0] & 0xffc0) == 0xfe80 // Link local
             }
@@ -139,7 +138,9 @@ impl IpExtractor {
     }
 }
 
-/// Convenience function to extract real IP with default configuration.
+/// Convenience function to extract real IP with default configuration that trusts private IPs.
+///
+/// This function is a shortcut for `IpExtractor::default().trust_private_ips(true)`.
 ///
 /// # Arguments
 ///
@@ -156,7 +157,7 @@ impl IpExtractor {
 /// headers.insert("x-real-ip".to_string(), "192.168.1.100".to_string());
 ///
 /// let ip = extract_real_ip(&headers, Some("127.0.0.1".to_string()));
-/// // Will return 192.168.1.100 if trust_private_ips is true, otherwise 127.0.0.1
+/// assert_eq!(ip, Some("192.168.1.100".parse().unwrap()));
 /// ```
 pub fn extract_real_ip(headers: &HeaderMap, fallback_ip: Option<String>) -> Option<IpAddr> {
     let extractor = IpExtractor::default().trust_private_ips(true);
