@@ -11,27 +11,27 @@ use real::{IpExtractor, RealIp, RealIpLayer};
 use serde_json::json;
 use std::net::SocketAddr;
 use tower::ServiceBuilder;
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 #[tokio::main]
 async fn main() {
-    // Initialize tracing for better logging
-    tracing_subscriber::init();
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer())
+        .init();
 
-    // Create the application with real IP middleware
     let app = create_app();
-
-    // Start the server
     let listener = tokio::net::TcpListener::bind("0.0.0.0:3000").await.unwrap();
 
-    println!("Server starting on http://0.0.0.0:3000");
+    println!("Server starting on http://localhost:3000");
     println!("Test endpoints:");
-    println!("  • GET /              - Hello World with IP info");
-    println!("  • GET /ip            - JSON response with IP details");
-    println!("  • GET /ip/strict     - JSON response with strict IP validation");
+    println!("  • GET /              - Hello World with IP info (using default layer)");
+    println!("  • GET /ip            - JSON response with IP details (using default layer)");
+    println!("  • GET /strict        - JSON response with strict IP validation");
+    println!("  • GET /debug         - Debug endpoint showing all connection info");
     println!();
     println!("Test with headers:");
     println!("  curl -H 'X-Real-IP: 203.0.113.42' http://localhost:3000/ip");
-    println!("  curl -H 'X-Forwarded-For: 198.51.100.1, 192.168.1.1' http://localhost:3000/ip");
+    println!("  curl -H 'X-Forwarded-For: 198.51.100.1, 192.168.1.1' http://localhost:3000/strict");
     println!("  curl -H 'CF-Connecting-IP: 192.0.2.100' http://localhost:3000/ip");
     println!();
 
@@ -44,34 +44,24 @@ async fn main() {
 }
 
 fn create_app() -> Router {
-    // Create different middleware layers for different behaviors
-    let default_layer = RealIpLayer::default(); // Trusts private IPs
-    let strict_layer = RealIpLayer::strict(); // Doesn't trust private IPs from headers
+    // keep your ServiceBuilder layer if you plan to add middleware later
+    let app = Router::new().layer(ServiceBuilder::new());
 
-    // Create custom extractor with specific headers
-    let custom_extractor = IpExtractor::new()
-        .with_headers(vec![
-            "cf-connecting-ip".to_string(),
-            "x-real-ip".to_string(),
-            "x-forwarded-for".to_string(),
-        ])
-        .trust_private_ips(true);
-
-    let custom_layer = RealIpLayer::with_extractor(custom_extractor);
-
-    Router::new()
-        // Basic hello world endpoint with default middleware
+    let default_layer = RealIpLayer::default();
+    let default_router = Router::new()
         .route("/", get(hello_handler))
-        .layer(ServiceBuilder::new().layer(default_layer))
-        // IP info endpoint with default middleware
         .route("/ip", get(ip_handler))
-        .layer(ServiceBuilder::new().layer(custom_layer.clone()))
-        // Strict IP validation endpoint
-        .route("/ip/strict", get(ip_strict_handler))
-        .layer(ServiceBuilder::new().layer(strict_layer))
-        // Debug endpoint showing all connection info
+        .layer(default_layer);
+
+    let strict_layer = RealIpLayer::strict();
+    let strict_router = Router::new()
+        .route("/", get(ip_strict_handler))
+        .layer(strict_layer);
+
+    // merge the default (root) router instead of nesting it at "/"
+    app.merge(default_router)
+        .nest("/strict", strict_router)
         .route("/debug", get(debug_handler))
-        .layer(ServiceBuilder::new().layer(custom_layer))
 }
 
 /// Basic hello world handler that shows the extracted real IP
@@ -104,7 +94,7 @@ async fn hello_handler(real_ip: RealIp) -> Html<String> {
                 </div>
                 <div class="endpoint">
                     <h3>Strict IP Validation</h3>
-                    <div class="code">GET /ip/strict</div>
+                    <div class="code">GET /strict</div>
                     <p>Uses strict validation that rejects private IPs from headers</p>
                 </div>
                 <div class="endpoint">
@@ -114,7 +104,7 @@ async fn hello_handler(real_ip: RealIp) -> Html<String> {
                 </div>
                 <h2>Test with custom headers:</h2>
                 <div class="code">curl -H 'X-Real-IP: 203.0.113.42' http://localhost:3000/ip</div>
-                <div class="code">curl -H 'X-Forwarded-For: 198.51.100.1, 192.168.1.1' http://localhost:3000/ip</div>
+                <div class="code">curl -H 'X-Forwarded-For: 198.51.100.1, 192.168.1.1' http://localhost:3000/strict</div>
                 <div class="code">curl -H 'CF-Connecting-IP: 192.0.2.100' http://localhost:3000/ip</div>
             </div>
         </body>
